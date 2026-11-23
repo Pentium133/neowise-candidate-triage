@@ -8,7 +8,14 @@
     body { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; font: 1rem/1.5 system-ui, sans-serif; }
     textarea { box-sizing: border-box; display: block; width: 100%; margin: .5rem 0; padding: .5rem; font: inherit; }
     button { padding: .4rem .8rem; font: inherit; }
-    pre { white-space: pre-wrap; }
+    #status { margin: 1rem 0 0; padding: .6rem .8rem; border-left: .25rem solid #888; background: #f3f3f3; color: #111; }
+    #status[data-kind="ready"] { border-color: #1a7f37; background: #e8f5ec; }
+    #status[data-kind="manual"] { border-color: #b35900; background: #fff1e0; }
+    #status[data-kind="invalid"] { border-color: #b3261e; background: #fdecea; }
+    dl { margin: 1rem 0 0; }
+    dt { font-weight: 600; }
+    dd { margin: 0 0 .75rem; white-space: pre-wrap; }
+    [hidden] { display: none; }
   </style>
 </head>
 <body>
@@ -18,18 +25,67 @@
     <textarea id="message" rows="4"></textarea>
     <button type="submit">Разобрать заявку</button>
   </form>
-  <pre id="result" aria-live="polite"></pre>
+  <div aria-live="polite">
+    <p id="status" hidden></p>
+    <dl id="result" hidden>
+      <dt>Тема</dt>
+      <dd id="topic"></dd>
+      <dt>Черновик ответа</dt>
+      <dd id="draft"></dd>
+    </dl>
+  </div>
   <script type="module">
+    import { viewFor, invalidView } from "/view.mjs";
+
     const form = document.querySelector("form");
+    const message = document.querySelector("#message");
+    const button = form.querySelector("button");
+    const status = document.querySelector("#status");
     const result = document.querySelector("#result");
+    const topic = document.querySelector("#topic");
+    const draft = document.querySelector("#draft");
+
+    // Каждый показ переписывает тему и черновик целиком,
+    // поэтому результат прошлой заявки не переживает новый запрос.
+    function show(view) {
+      status.textContent = view.message;
+      status.dataset.kind = view.kind;
+      status.hidden = false;
+      topic.textContent = view.topic;
+      draft.textContent = view.draft;
+      result.hidden = view.kind !== "ready";
+    }
+
+    async function requestTriage(text) {
+      try {
+        const reply = await fetch("/api/triage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+          signal: AbortSignal.timeout(5_000),
+        });
+        return await reply.json();
+      } catch {
+        return undefined; // сеть, таймаут или не JSON: viewFor отправит в ручной разбор
+      }
+    }
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const reply = await fetch("/api/triage", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: document.querySelector("#message").value }),
-      });
-      result.textContent = JSON.stringify(await reply.json(), null, 2);
+      if (button.disabled) return;
+      const text = message.value;
+      if (text.trim() === "") {
+        show(invalidView);
+        message.focus();
+        return;
+      }
+      button.disabled = true;
+      show({ kind: "loading", message: "Разбираем заявку…", topic: "", draft: "" });
+      try {
+        show(viewFor(await requestTriage(text)));
+      } finally {
+        button.disabled = false;
+      }
     });
   </script>
 </body>
